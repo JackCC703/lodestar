@@ -7,52 +7,57 @@ UPSTREAM_BRANCH=${UPSTREAM_BRANCH:-unstable}
 PR_BRANCH=${PR_BRANCH:-jackcc/lc-finality-fix}
 ENCLAVE=${ENCLAVE:-lc-ab}
 WORKDIR=${WORKDIR:-/workspaces/lodestar}
+FILES="$(cd "$(dirname "$0")" && pwd)"
+POLL_SECONDS=${POLL_SECONDS:-1500}
+
+step() { echo; echo "=== $* ($(date +%H:%M:%S)) ==="; }
 
 cd "$WORKDIR"
 
-echo "== native preset =="
-# Dockerfile.dev must declare ARG LODESTAR_PRESET and export it before `pnpm build:native`,
-# otherwise the addon is built for mainnet and the node fails with PresetMismatch.
+step "preflight"
 grep -q "ARG LODESTAR_PRESET" Dockerfile.dev || { echo "Dockerfile.dev lacks ARG LODESTAR_PRESET"; exit 1; }
-
-echo "== docker =="
-docker info --format '{{.ServerVersion}} {{.NCPU}}cpu {{.MemTotal}}' || {
-  echo "docker unavailable, aborting"; exit 1; }
-
-echo "== kurtosis =="
+docker info --format 'docker {{.ServerVersion}} {{.NCPU}}cpu'
 command -v kurtosis >/dev/null || {
-  echo "Installing kurtosis CLI"
+  echo "installing kurtosis"
   curl -fsSL https://docs.kurtosis.com/install.sh | bash
 }
+export PATH="$PATH:$HOME/bin:$HOME/.local/bin"
+kurtosis version | head -2
 
-echo "== build unstable =="
+step "build unstable"
 git fetch origin "$UPSTREAM_BRANCH"
 git checkout --detach "origin/$UPSTREAM_BRANCH"
 docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:unstable -f Dockerfile.dev .
 
-echo "== build finality branch =="
+step "build finality branch"
 git fetch origin "$PR_BRANCH"
 git checkout --detach "origin/$PR_BRANCH"
 docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:finality -f Dockerfile.dev .
 
-echo "== start devnet =="
+step "start devnet"
 kurtosis enclave rm -f "$ENCLAVE" 2>/dev/null || true
 kurtosis run github.com/ethpandaops/ethereum-package \
   --enclave "$ENCLAVE" \
-  --args-file network_params.yaml \
-  --image-download always
+  --args-file "$FILES/network_params.yaml" \
+  --image-download always 2>&1 | tail -40
 
-echo "== wait for two sync committee periods =="
-sleep 240
+step "wait for genesis and two periods"
+sleep 300
+for p in 33000 33005 33010; do
+  echo -n "port $p: "
+  curl -s -m 5 "http://127.0.0.1:$p/eth/v1/node/version" || echo "no answer"
+  echo
+done
 
-echo "== poll =="
-python3 poll.py \
-  --duration "${POLL_SECONDS:-1500}" \
+step "poll"
+python3 "$FILES/poll.py" \
+  --duration "$POLL_SECONDS" \
   --interval 2 \
   --node "unstable=http://127.0.0.1:33000" \
   --node "finality=http://127.0.0.1:33005" \
   --node "nimbus=http://127.0.0.1:33010" \
-  --out results.jsonl | tee summary.txt
+  --out "$FILES/results.jsonl" | tee "$FILES/summary.txt"
 
-echo "== done, results in results.jsonl and summary.txt =="
+step "done"
+echo "summary: $FILES/summary.txt"
 echo "cleanup: kurtosis enclave rm -f $ENCLAVE"
