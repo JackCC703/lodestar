@@ -23,8 +23,6 @@ network_params:
   preset: minimal
   seconds_per_slot: 6
   genesis_delay: 40
-  electra_fork_epoch: 0
-  fulu_fork_epoch: null
 
 global_log_level: info
 
