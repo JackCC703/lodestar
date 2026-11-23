@@ -64,6 +64,11 @@ COPY bindings/napi ./bindings/napi
 
 # Keep the Zig package and build caches outside the layer so that a Zig edit
 # recompiles incrementally instead of refetching and rebuilding everything.
+# Preset for the native addon. bindings/package.json builds
+# `prepare-${LODESTAR_PRESET}`, which defaults to mainnet.
+ARG LODESTAR_PRESET=mainnet
+ENV LODESTAR_PRESET=${LODESTAR_PRESET}
+
 RUN --mount=type=cache,target=/root/.cache/zig \
     --mount=type=cache,target=/usr/app/.zig-cache \
     pnpm build:native

@@ -1,0 +1,34 @@
+# Three node devnet: Lodestar unstable, Lodestar with the finality fix, Nimbus as reference.
+# Minimal preset so a sync committee period is 8 epochs, which makes the period boundary
+# window (where the two builds differ) easy to observe in a short run.
+participants:
+  - el_type: reth
+    cl_type: lodestar
+    cl_image: lodestar:unstable
+    vc_image: lodestar:unstable
+    count: 1
+    validator_count: 64
+  - el_type: reth
+    cl_type: lodestar
+    cl_image: lodestar:finality
+    vc_image: lodestar:finality
+    count: 1
+    validator_count: 64
+  - el_type: reth
+    cl_type: nimbus
+    count: 1
+    validator_count: 64
+
+network_params:
+  preset: minimal
+  seconds_per_slot: 6
+  genesis_delay: 40
+  electra_fork_epoch: 0
+  fulu_fork_epoch: null
+
+global_log_level: info
+
+port_publisher:
+  cl:
+    enabled: true
+    public_port_start: 33000
