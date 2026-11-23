@@ -1,13 +1,11 @@
 {
   "name": "Lodestar devnet",
-  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-24-bullseye",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/python:1": {},
-    "ghcr.io/devcontainers-extra/features/zig:1": {"version": "0.16.0"},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
-      "version": "latest",
-      "moby": false
-    }
+    "ghcr.io/devcontainers/features/node:1": {"version": "26"},
+    "ghcr.io/devcontainers-extra/features/zig:1": {"version": "0.16.0"}
   },
   "hostRequirements": {
     "cpus": 4,
