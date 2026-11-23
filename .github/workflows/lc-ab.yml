@@ -2,6 +2,14 @@ name: lc-ab
 
 on:
   workflow_dispatch:
+    inputs:
+      poll_seconds:
+        description: "How long to poll the light client endpoints"
+        default: "1500"
+
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
 
 jobs:
   ab:
@@ -12,28 +20,35 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Stash the A/B files outside the checkout
+        run: |
+          AB="$RUNNER_TEMP/ab"
+          echo "AB=$AB" >> "$GITHUB_ENV"
+          mkdir -p "$AB/out"
+          cp devnet-ab/network_params.yaml devnet-ab/poll.py "$AB/"
+          ls -l "$AB"
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker system prune -af || true
           df -h /
 
-      - name: Enable preset build arg
+      - name: Build both images
         run: |
-          if ! grep -q "ARG LODESTAR_PRESET" Dockerfile.dev; then
-            sed -i 's|^RUN --mount=type=cache,target=/root/.cache/zig|ARG LODESTAR_PRESET=mainnet\nENV LODESTAR_PRESET=${LODESTAR_PRESET}\n\n&|' Dockerfile.dev
-          fi
-          grep -n "LODESTAR_PRESET" Dockerfile.dev
-
-      - name: Build unstable image
-        run: |
-          git checkout -q origin/unstable || git checkout -q unstable
-          docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:unstable -f Dockerfile.dev .
-
-      - name: Build finality image
-        run: |
-          git checkout -q origin/jackcc/lc-finality-fix
-          docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:finality -f Dockerfile.dev .
+          build() {
+            local ref=$1 tag=$2 dir="$RUNNER_TEMP/src-$2"
+            git worktree add --detach "$dir" "$ref"
+            if ! grep -q "ARG LODESTAR_PRESET" "$dir/Dockerfile.dev"; then
+              sed -i 's|^RUN --mount=type=cache,target=/root/.cache/zig|ARG LODESTAR_PRESET=mainnet\nENV LODESTAR_PRESET=${LODESTAR_PRESET}\n\n&|' "$dir/Dockerfile.dev"
+            fi
+            grep -n "LODESTAR_PRESET" "$dir/Dockerfile.dev"
+            echo "building $tag from $(git -C "$dir" log --oneline -1)"
+            docker build --build-arg LODESTAR_PRESET=minimal -t "lodestar:$tag" -f "$dir/Dockerfile.dev" "$dir"
+          }
+          build origin/unstable unstable
+          build origin/jackcc/lc-finality-fix finality
+          docker images | grep lodestar
 
       - name: Install kurtosis
         run: |
@@ -47,41 +62,61 @@ jobs:
         run: |
           kurtosis run github.com/ethpandaops/ethereum-package \
             --enclave lc-ab \
-            --args-file devnet-ab/network_params.yaml \
-            --image-download always 2>&1 | tail -60
+            --args-file "$AB/network_params.yaml" \
+            --image-download missing 2>&1 | tail -80
+          kurtosis enclave inspect lc-ab | tee "$AB/out/enclave.txt"
 
-      - name: Wait for genesis and two periods
+      - name: Resolve beacon API URLs
         run: |
-          sleep 300
-          for p in 33000 33005 33010; do
-            echo -n "port $p: "
-            curl -s -m 5 "http://127.0.0.1:$p/eth/v1/node/version" || echo "no answer"
-            echo
+          U=$(grep -oE "cl-1-lodestar-[a-z]+" "$AB/out/enclave.txt" | head -1)
+          F=$(grep -oE "cl-2-lodestar-[a-z]+" "$AB/out/enclave.txt" | head -1)
+          N=$(grep -oE "cl-3-nimbus-[a-z]+" "$AB/out/enclave.txt" | head -1)
+          echo "services: $U $F $N"
+          [ -n "$U" ] && [ -n "$F" ] && [ -n "$N" ] || { echo "missing a CL service"; exit 1; }
+          {
+            echo "URL_UNSTABLE=$(kurtosis port print lc-ab "$U" http)"
+            echo "URL_FINALITY=$(kurtosis port print lc-ab "$F" http)"
+            echo "URL_NIMBUS=$(kurtosis port print lc-ab "$N" http)"
+          } | tee -a "$GITHUB_ENV"
+
+      - name: Wait until all three nodes answer
+        run: |
+          ok=0
+          for i in $(seq 1 60); do
+            ok=0
+            for u in "$URL_UNSTABLE" "$URL_FINALITY" "$URL_NIMBUS"; do
+              curl -sf -m 5 "$u/eth/v1/node/version" >/dev/null && ok=$((ok+1))
+            done
+            echo "attempt $i: $ok/3 up"
+            [ "$ok" -eq 3 ] && break
+            sleep 10
+          done
+          [ "$ok" -eq 3 ] || { echo "nodes did not come up"; exit 1; }
+          for u in "$URL_UNSTABLE" "$URL_FINALITY" "$URL_NIMBUS"; do
+            curl -s "$u/eth/v1/node/version"; echo
+            curl -s "$u/eth/v1/beacon/headers/head" | head -c 300; echo
           done
 
       - name: Poll
         run: |
-          python3 devnet-ab/poll.py \
-            --duration 1500 --interval 2 \
-            --node "unstable=http://127.0.0.1:33000" \
-            --node "finality=http://127.0.0.1:33005" \
-            --node "nimbus=http://127.0.0.1:33010" \
-            --out devnet-ab/results.jsonl | tee devnet-ab/summary.txt
+          python3 "$AB/poll.py" \
+            --duration "${{ inputs.poll_seconds }}" --interval 2 \
+            --node "unstable=$URL_UNSTABLE" \
+            --node "finality=$URL_FINALITY" \
+            --node "nimbus=$URL_NIMBUS" \
+            --out "$AB/out/results.jsonl" | tee "$AB/out/summary.txt"
 
       - name: Collect logs
         if: always()
         run: |
-          mkdir -p artifacts
-          cp devnet-ab/summary.txt artifacts/ 2>/dev/null || true
-          cp devnet-ab/results.jsonl artifacts/ 2>/dev/null || true
-          for s in $(kurtosis enclave inspect lc-ab 2>/dev/null | grep -oE "cl-[0-9]+-[a-z]+-[a-z]+" | sort -u | head -6); do
-            kurtosis service logs lc-ab "$s" > "artifacts/$s.log" 2>&1 || true
+          for s in $(grep -oE "(cl|vc)-[0-9]+-[a-z]+-[a-z]+" "$AB/out/enclave.txt" 2>/dev/null | sort -u); do
+            kurtosis service logs lc-ab "$s" --all > "$AB/out/$s.log" 2>&1 || true
           done
-          du -sh artifacts || true
+          du -sh "$AB/out" || true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: lc-ab-results
-          path: artifacts/
+          path: ${{ runner.temp }}/ab/out/
           if-no-files-found: warn
