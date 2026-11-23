@@ -18,6 +18,13 @@ jobs:
           sudo docker system prune -af || true
           df -h /
 
+      - name: Enable preset build arg
+        run: |
+          if ! grep -q "ARG LODESTAR_PRESET" Dockerfile.dev; then
+            sed -i 's|^RUN --mount=type=cache,target=/root/.cache/zig|ARG LODESTAR_PRESET=mainnet\nENV LODESTAR_PRESET=${LODESTAR_PRESET}\n\n&|' Dockerfile.dev
+          fi
+          grep -n "LODESTAR_PRESET" Dockerfile.dev
+
       - name: Build unstable image
         run: |
           git checkout -q origin/unstable || git checkout -q unstable
