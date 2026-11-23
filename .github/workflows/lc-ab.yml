@@ -1,0 +1,79 @@
+name: lc-ab
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Build unstable image
+        run: |
+          git checkout -q origin/unstable || git checkout -q unstable
+          docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:unstable -f Dockerfile.dev .
+
+      - name: Build finality image
+        run: |
+          git checkout -q origin/jackcc/lc-finality-fix
+          docker build --build-arg LODESTAR_PRESET=minimal -t lodestar:finality -f Dockerfile.dev .
+
+      - name: Install kurtosis
+        run: |
+          echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq kurtosis
+          kurtosis version
+
+      - name: Start devnet
+        run: |
+          kurtosis run github.com/ethpandaops/ethereum-package \
+            --enclave lc-ab \
+            --args-file devnet-ab/network_params.yaml \
+            --image-download always 2>&1 | tail -60
+
+      - name: Wait for genesis and two periods
+        run: |
+          sleep 300
+          for p in 33000 33005 33010; do
+            echo -n "port $p: "
+            curl -s -m 5 "http://127.0.0.1:$p/eth/v1/node/version" || echo "no answer"
+            echo
+          done
+
+      - name: Poll
+        run: |
+          python3 devnet-ab/poll.py \
+            --duration 1500 --interval 2 \
+            --node "unstable=http://127.0.0.1:33000" \
+            --node "finality=http://127.0.0.1:33005" \
+            --node "nimbus=http://127.0.0.1:33010" \
+            --out devnet-ab/results.jsonl | tee devnet-ab/summary.txt
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p artifacts
+          cp devnet-ab/summary.txt artifacts/ 2>/dev/null || true
+          cp devnet-ab/results.jsonl artifacts/ 2>/dev/null || true
+          for s in $(kurtosis enclave inspect lc-ab 2>/dev/null | grep -oE "cl-[0-9]+-[a-z]+-[a-z]+" | sort -u | head -6); do
+            kurtosis service logs lc-ab "$s" > "artifacts/$s.log" 2>&1 || true
+          done
+          du -sh artifacts || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lc-ab-results
+          path: artifacts/
+          if-no-files-found: warn
