@@ -39,7 +39,8 @@ jobs:
         run: |
           echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
           sudo apt-get update -qq
-          sudo apt-get install -y -qq kurtosis
+          sudo apt-get install -y -qq kurtosis-cli
+          kurtosis analytics disable || true
           kurtosis version
 
       - name: Start devnet
