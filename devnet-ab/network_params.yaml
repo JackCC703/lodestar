@@ -8,16 +8,19 @@ participants:
     vc_image: lodestar:unstable
     count: 1
     validator_count: 64
+    supernode: true
   - el_type: reth
     cl_type: lodestar
     cl_image: lodestar:finality
     vc_image: lodestar:finality
     count: 1
     validator_count: 64
+    supernode: true
   - el_type: reth
     cl_type: nimbus
     count: 1
     validator_count: 64
+    supernode: true
 
 network_params:
   preset: minimal

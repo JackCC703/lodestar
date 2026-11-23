@@ -28,6 +28,24 @@ jobs:
           cp devnet-ab/network_params.yaml devnet-ab/poll.py "$AB/"
           ls -l "$AB"
 
+      - name: Install kurtosis
+        run: |
+          # The apt repo lags behind; ethereum-package main needs a recent CLI and engine.
+          V=1.23.0
+          curl -fsSL -o /tmp/kurtosis.tgz \
+            "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/$V/kurtosis-cli_${V}_linux_amd64.tar.gz"
+          sudo tar -xzf /tmp/kurtosis.tgz -C /usr/local/bin kurtosis
+          kurtosis analytics disable || true
+          kurtosis version
+
+      - name: Validate devnet config
+        run: |
+          kurtosis run github.com/ethpandaops/ethereum-package \
+            --enclave lc-ab-dry \
+            --args-file "$AB/network_params.yaml" \
+            --dry-run 2>&1 | tail -30
+          kurtosis enclave rm -f lc-ab-dry || true
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -49,16 +67,6 @@ jobs:
           build origin/unstable unstable
           build origin/jackcc/lc-finality-fix finality
           docker images | grep lodestar
-
-      - name: Install kurtosis
-        run: |
-          # The apt repo lags behind; ethereum-package main needs a recent CLI and engine.
-          V=1.23.0
-          curl -fsSL -o /tmp/kurtosis.tgz \
-            "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/$V/kurtosis-cli_${V}_linux_amd64.tar.gz"
-          sudo tar -xzf /tmp/kurtosis.tgz -C /usr/local/bin kurtosis
-          kurtosis analytics disable || true
-          kurtosis version
 
       - name: Start devnet
         run: |
