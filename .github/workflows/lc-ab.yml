@@ -52,9 +52,11 @@ jobs:
 
       - name: Install kurtosis
         run: |
-          echo "deb [trusted=yes] https://apt.fury.io/kurtosis-tech/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq kurtosis-cli
+          # The apt repo lags behind; ethereum-package main needs a recent CLI and engine.
+          V=1.23.0
+          curl -fsSL -o /tmp/kurtosis.tgz \
+            "https://github.com/kurtosis-tech/kurtosis-cli-release-artifacts/releases/download/$V/kurtosis-cli_${V}_linux_amd64.tar.gz"
+          sudo tar -xzf /tmp/kurtosis.tgz -C /usr/local/bin kurtosis
           kurtosis analytics disable || true
           kurtosis version
 
